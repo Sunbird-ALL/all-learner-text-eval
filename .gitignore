@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local development settings
+.env
+.venv
+
+# IDE files (can vary based on your editor/IDE)
+.idea/
+.vscode/
+
+# Compiled Python files
+*.pyc
+
+# Dependency directories
+venv/
+env/
+envs/
+
+# Log files
+*.log
+
+# Environment variables file
+.env
+
+# System or configuration files
+.DS_Store
+Thumbs.db
