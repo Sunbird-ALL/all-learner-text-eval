@@ -9,6 +9,14 @@ app = FastAPI(
 
 app.include_router(router)
 
+# Health check endpoint
+@app.get("/ping")
+async def health_check():
+    return {
+        "status": True,
+        "message": "Text Eval Service is working"
+    }
+
 if __name__ == "__main__":
     import uvicorn
     num_workers = os.cpu_count() or 1
