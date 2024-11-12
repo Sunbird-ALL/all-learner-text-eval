@@ -348,5 +348,14 @@ def get_phonemes():
         "phonemes": phonemesList
     })
 
+# Health check endpoint
+@app.get("/ping")
+async def health_check():
+    return {
+        "status": True,
+        "message": "Service is working"
+    }
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=False)
