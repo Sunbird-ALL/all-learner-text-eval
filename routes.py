@@ -3,7 +3,7 @@ import io
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
+from utils import concatenate_audio_with_context, denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
 from schemas import TextData, audioData, PhonemesRequest, PhonemesResponse, ErrorArraysResponse, AudioProcessingResponse
 from typing import List
 import jiwer
@@ -215,6 +215,10 @@ async def audio_processing(data: audioData):
         pause_count = 0
         denoised_audio_base64 = ""
 
+        if data.contentType.lower() == 'word' and data.language == 'en':
+            audio_data = concatenate_audio_with_context(audio_data)
+            print("Concate Audio data")
+
         if data.enablePauseCount:
             try:
                 pause_count = get_pause_count(audio_io)
@@ -242,6 +246,7 @@ async def audio_processing(data: audioData):
                 raise HTTPException(status_code=500, detail=f"Unexpected error in denoise_with_rnnoise: {str(e)}")
 
         return {
+            "concatenated_audio_base64" : audio_data,
             "denoised_audio_base64": denoised_audio_base64,
             "pause_count": pause_count
         }
