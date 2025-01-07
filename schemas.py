@@ -11,6 +11,7 @@ class audioData(BaseModel):
     enablePauseCount: bool = Field(..., example=True, description="Flag to enable pause count detection.")
     enableDenoiser: bool = Field(..., example=True, description="Flag to enable audio denoising.")
     contentType: str = Field(..., example="Word", description="The type of content in the audio.")
+    language: str = Field(..., example="en", description="language of the audio.")
 
 class PhonemesRequest(BaseModel):
     text: str = Field(..., example="dog jumps", description="The text to convert into phonemes.")
@@ -33,5 +34,6 @@ class ErrorArraysResponse(BaseModel):
     construct_text: Optional[str] = Field(None, example="jumps", description="Constructed text based on the hypothesis.")
 
 class AudioProcessingResponse(BaseModel):
+    concatenated_audio_base64: str = Field(..., example="UkiGRV////wqgwbwrbw////AAAA", description="Base64 encoded denoised audio.")
     denoised_audio_base64: str = Field(..., example="UkiGRV////wqgwbwrbw////AAAA", description="Base64 encoded denoised audio.")
     pause_count: Optional[int] = Field(..., example=2, description="Count of pauses detected.")

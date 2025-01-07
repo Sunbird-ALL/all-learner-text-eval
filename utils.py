@@ -267,3 +267,50 @@ def processLP(orig_text, resp_text):
     #function to calculate wer cer, substitutions, deletions and insertions, silence, repetitions
     #insert into DB the LearnerProfile vector
     return cons_list, miss_list,construct_text
+
+def concatenate_audio_with_context(audio_base64):
+    try:
+        # Decode the base64 audio input
+        try:
+            audio_data = base64.b64decode(audio_base64)
+        except base64.binascii.Error as e:
+            raise ValueError(f"Invalid base64 string: {str(e)}")
+
+        # Convert decoded audio data to BytesIO
+        audio_io = io.BytesIO(audio_data)
+        input_audio = audio_io.read()
+
+        # Path to the context audio file (hardcoded)
+        context_audio_path = "./context_before.wav"
+
+        # Concatenate the context audio and the input audio
+        try:
+            ffmpeg_input_context = ffmpeg.input(context_audio_path)  # Context audio file
+            ffmpeg_input_original = ffmpeg.input('pipe:')  # Original audio from pipe
+
+            # Perform concatenation
+            concatenated_audio, _ = (
+                ffmpeg
+                .filter([ffmpeg_input_context, ffmpeg_input_original], 'concat', n=2, v=0, a=1)
+                .output('pipe:', format='wav')
+                .run(input=input_audio, capture_stdout=True, capture_stderr=True)
+            )
+        except ffmpeg.Error as e:
+            error_log = e.stderr.decode()
+            print(f"FFmpeg error during context concatenation: {error_log}")
+            raise RuntimeError(f"Error during context concatenation with FFmpeg: {error_log}")
+
+        # Encode concatenated audio to Base64
+        try:
+            concatenated_audio_base64 = base64.b64encode(concatenated_audio).decode('utf-8')
+        except Exception as e:
+            raise RuntimeError(f"Error encoding concatenated audio to Base64: {str(e)}")
+
+        # Clear cache to free memory
+        del audio_data
+        del audio_io
+
+        return concatenated_audio_base64
+
+    except Exception as e:
+        raise RuntimeError(f"Error during audio concatenation: {str(e)}")
