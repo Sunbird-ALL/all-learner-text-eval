@@ -3,16 +3,25 @@ import io
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
+from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP, process_audio_and_upload
 from schemas import TextData, audioData, PhonemesRequest, PhonemesResponse, ErrorArraysResponse, AudioProcessingResponse
 from typing import List
 import jiwer
 import eng_to_ipa as p
+import base64
+import boto3
+import uuid
+import os
+from fastapi import FastAPI, HTTPException
+from pathlib import Path
+from dotenv import load_dotenv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables from .env file
+load_dotenv()
 router = APIRouter()
 
 @router.post('/getTextMatrices', response_model=ErrorArraysResponse, summary="Compute Text Matrices", description="Computes WER, CER, insertion, deletion, substitution, confidence char list, missing char list, construct text", responses={
@@ -250,3 +259,70 @@ async def audio_processing(data: audioData):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.post(
+    "/uploadAudio",
+    summary="Upload Audio",
+    description="Uploads base64-encoded audio to S3 with a custom file name and storage path.",
+    responses={
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Base64 string cannot be empty."}
+                }
+            }
+        },
+        422: {
+            "description": "Unprocessable Entity",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "base64_string"],
+                                "msg": "field required",
+                                "type": "value_error.missing"
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Internal Server Error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Unexpected error: Error uploading audio: <error_message>"}
+                }
+            }
+        }
+    }
+)
+async def upload_audio(data: dict):
+    """
+    API to upload base64-encoded audio to S3 with a custom file name and storage path.
+    """
+    try:
+        # Extract values from request body
+        file_name = data.get("file_name")
+        file_storage_path = data.get("file_storage_path")
+        base64_string = data.get("base64_string")
+
+        # Validate input
+        if not base64_string or not base64_string.strip():
+            raise HTTPException(status_code=400, detail="Base64 string cannot be empty.")
+        if not file_name or not file_name.strip():
+            raise HTTPException(status_code=400, detail="File name cannot be empty.")
+        if not file_storage_path or not file_storage_path.strip():
+            raise HTTPException(status_code=400, detail="File storage path cannot be empty.")
+
+        # Process and upload audio
+        return process_audio_and_upload(file_name, file_storage_path, base64_string)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
