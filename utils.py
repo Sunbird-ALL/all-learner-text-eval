@@ -5,9 +5,25 @@ from functools import lru_cache
 import eng_to_ipa as p
 from fuzzywuzzy import fuzz
 import soundfile as sf
+from pathlib import Path
+import boto3
+import os
 
 english_phoneme = ["b","d","f","g","h","ʤ","k","l","m","n","p","r","s","t","v","w","z","ʒ","tʃ","ʃ","θ","ð","ŋ","j","æ","eɪ","ɛ","i:","ɪ","aɪ","ɒ","oʊ","ʊ","ʌ","u:","ɔɪ","aʊ","ə","eəʳ","ɑ:","ɜ:ʳ","ɔ:","ɪəʳ","ʊəʳ","i","u","ɔ","ɑ","ɜ","e","ʧ","o","y","a", "x", "c"]
 anamoly_list = {}
+
+
+# Get S3 configuration from environment variables
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+AWS_REGION = os.getenv("AWS_REGION")
+
+# Initialize S3 Client (uses credentials from .env)
+s3_client = boto3.client(
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=AWS_REGION,
+)
 
 def denoise_with_rnnoise(audio_base64, content_type, padding_duration=0.1, time_stretch_factor=0.75):
     try:
@@ -267,3 +283,24 @@ def processLP(orig_text, resp_text):
     #function to calculate wer cer, substitutions, deletions and insertions, silence, repetitions
     #insert into DB the LearnerProfile vector
     return cons_list, miss_list,construct_text
+
+def process_audio_and_upload(file_name: str, file_storage_path: str, base64_string: str):
+    """
+    Function to process audio and upload it to S3 with a specified file name and path.
+    """
+    # Define full S3 file path
+    s3_file_path = f"{file_storage_path}/{file_name}"
+
+    temp_file_path = Path(f"/tmp/{file_name}")
+
+    # Decode and save the audio file
+    audio_data = base64.b64decode(base64_string)
+    temp_file_path.write_bytes(audio_data)
+
+    # Upload to S3 inside the specified folder
+    s3_client.upload_file(str(temp_file_path), S3_BUCKET_NAME, s3_file_path)
+
+    # Remove temp file
+    temp_file_path.unlink(missing_ok=True)
+
+    return {"message": "File uploaded successfully"}
