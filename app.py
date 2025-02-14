@@ -1,12 +1,15 @@
 import os
 from fastapi import FastAPI
 from routes import router
+from middleware import JWTMiddleware
 
 app = FastAPI(
     docs_url='/api/docs',
     openapi_url='/api/openapi.json'
 )
 
+# Add JWT middleware globally but only for specific routes inside the middleware
+app.add_middleware(JWTMiddleware)
 app.include_router(router)
 
 # Health check endpoint
