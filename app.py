@@ -2,15 +2,23 @@ import os
 from fastapi import FastAPI
 from routes import router
 from middleware import JWTMiddleware
+from routes.v1_routes import v1_router
+from routes.v2_routes import v2_router
 
+# Api doc url
 app = FastAPI(
+    title="Text Eval Service API",
+    version="2.0",
     docs_url='/api/docs',
     openapi_url='/api/openapi.json'
 )
 
-# Add JWT middleware globally but only for specific routes inside the middleware
+# Add JWT middleware globally only for selected routes.
 app.add_middleware(JWTMiddleware)
-app.include_router(router)
+
+# v1 & v2 Routes
+app.include_router(v1_router)
+app.include_router(v2_router)
 
 # Health check endpoint
 @app.get("/ping")
