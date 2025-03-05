@@ -2,8 +2,9 @@ import base64
 import io
 import logging
 from fastapi import APIRouter, HTTPException, Depends
+import numpy as np
 from pydantic import BaseModel
-from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
+from utils import calculate_wpm_from_audio, classify_expression, classify_intensity, classify_rate, classify_smoothness, classify_tempo, denoise_with_rnnoise, extract_intensity_praat, get_error_arrays, get_pause_count, split_into_phonemes, processLP, extract_pitch_praat, classify_pitch
 from schemas import TextData, audioData, PhonemesRequest, PhonemesResponse, ErrorArraysResponse, AudioProcessingResponse
 from typing import List
 import jiwer
@@ -95,6 +96,29 @@ async def compute_errors(data: TextData):
         except Exception as e:
             logger.error(f"Error extracting error arrays: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error extracting error arrays: {str(e)}")
+        
+        tempo_wpm = 0.0
+        tempo_class = None
+        rate_class = None
+        pause_count = None
+        if data.base64_string and hypothesis.strip():
+            # Use your new utility function
+            tempo_wpm = calculate_wpm_from_audio(hypothesis, data.base64_string)
+            try:
+                import base64, io
+                audio_bytes = base64.b64decode(data.base64_string)
+                audio_io = io.BytesIO(audio_bytes)
+                p_count, avg_pause  = get_pause_count(audio_io)
+                pause_count = p_count
+            except Exception as e:
+                logger.error(f"Error processing pause count: {str(e)}")
+                pause_count = None
+
+            # Classify tempo using both wpm and pause_count
+            tempo_class = classify_tempo(tempo_wpm, pause_count, language)
+            # Determine if reference is a single word
+            single_word = len(reference.split()) == 1
+            rate_class = classify_rate(tempo_wpm, language, single_word)
 
         return {
             "wer": wer,
@@ -107,7 +131,11 @@ async def compute_errors(data: TextData):
             "substitution_count": len(error_arrays['substitution']),
             "confidence_char_list": confidence_char_list,
             "missing_char_list": missing_char_list,
-            "construct_text": construct_text
+            "construct_text": construct_text,
+            "tempo_classification": tempo_class,
+            "words_per_minute": tempo_wpm,
+            "rate_classification": rate_class,
+            "pause_count": pause_count
         }
     except HTTPException as e:
         raise e
@@ -212,18 +240,31 @@ async def audio_processing(data: audioData):
             logger.error(f"Invalid base64 string: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Invalid base64 string: {str(e)}")
 
-        pause_count = 0
+        pause_count = None
+        avg_pause = None
         denoised_audio_base64 = ""
+        pitch_classification = None
+        pitch_mean = None
+        pitch_std = None
+        intensity_classification = None
+        intensity_mean = None
+        intensity_std = None
+        expression_classification = None
+        smoothness_classification = None
 
         if data.enablePauseCount:
             try:
-                pause_count = get_pause_count(audio_io)
+                p_count, avg_pause = get_pause_count(audio_io)
+                pause_count = p_count
+                smoothness_classification = classify_smoothness(p_count, avg_pause)
                 if pause_count is None:
                     logger.error("Error during pause count detection")
                     raise HTTPException(status_code=500, detail="Error during pause count detection")
             except Exception as e:
                 logger.error(f"Error during pause count detection: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Error during pause count detection: {str(e)}")
+            # IMPORTANT: Re-seek audio_io if used again, or re-decode audio because we've consumed it
+            audio_io.seek(0)
 
         if data.enableDenoiser:
             try:
@@ -240,10 +281,48 @@ async def audio_processing(data: audioData):
             except Exception as e:
                 logger.error(f"Unexpected error in denoise_with_rnnoise: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Unexpected error in denoise_with_rnnoise: {str(e)}")
+        else:
+            # If denoiser is not enabled, just keep original audio
+            denoised_audio_base64 = audio_data    
+            
+        if data.enable_prosody_fluency:
+            try:
+                denoised_audio_bytes = base64.b64decode(denoised_audio_base64)
+
+                # If we need pitch (or expression requires pitch)
+                pitch_values = extract_pitch_praat(denoised_audio_bytes)
+                if pitch_values.size > 0:
+                    pitch_classification = classify_pitch(pitch_values)
+                    pitch_mean = float(np.round(np.mean(pitch_values), 2))
+                    pitch_std = float(np.round(np.std(pitch_values), 2))
+                else:
+                    pitch_classification = "N/A"
+
+                # If we need intensity (or expression requires intensity)
+                intensity_values = extract_intensity_praat(denoised_audio_bytes, intensity_threshold=30)
+                if intensity_values.size > 0:
+                    intensity_classification = classify_intensity(intensity_values)
+                    intensity_mean = float(np.round(np.mean(intensity_values), 2))
+                    intensity_std = float(np.round(np.std(intensity_values), 2))
+                else:
+                    intensity_classification = "N/A"
+                # If expression is requested, we need both pitch & intensity
+                expression_classification = classify_expression(pitch_values, intensity_values)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error computing prosody and fluency: {str(e)}")
 
         return {
             "denoised_audio_base64": denoised_audio_base64,
-            "pause_count": pause_count
+            "pause_count": pause_count,
+            "avg_pause": avg_pause,
+            "smoothness_classification": smoothness_classification,
+            "pitch_classification": pitch_classification,
+            "pitch_mean": pitch_mean,
+            "pitch_std": pitch_std,
+            "intensity_classification": intensity_classification,
+            "intensity_mean": intensity_mean,
+            "intensity_std": intensity_std,
+            "expression_classification": expression_classification,
         }
     except HTTPException as e:
         raise e
