@@ -37,7 +37,7 @@ async def compute_errors(data: TextData):
         language = data.language
 
         # Validate language
-        allowed_languages = {"en", "ta", "te", "kn", "hi"}
+        allowed_languages = {"en", "ta", "te", "kn", "hi", "gu", "or"}
         if language not in allowed_languages:
             raise HTTPException(status_code=400, detail=f"Unsupported language: {language}. Supported languages are: {', '.join(allowed_languages)}")
 
