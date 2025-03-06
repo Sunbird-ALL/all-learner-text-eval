@@ -1,54 +1,31 @@
-import base64
-import io
 import logging
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
+from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP, process_audio_and_upload
 from schemas import TextData, audioData, PhonemesRequest, PhonemesResponse, ErrorArraysResponse, AudioProcessingResponse
 from typing import List
+from schemas import TextData, ErrorArraysResponse
+from schemas import PhonemesResponse, PhonemesRequest
+from utils import get_error_arrays, processLP
 import jiwer
+import base64
+import io
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
 import eng_to_ipa as p
+import boto3
+import uuid
+import os
+from fastapi import FastAPI, HTTPException
+from pathlib import Path
+from dotenv import load_dotenv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Common routes
+common_router = APIRouter()
 
-@router.post('/getTextMatrices', response_model=ErrorArraysResponse, summary="Compute Text Matrices", description="Computes WER, CER, insertion, deletion, substitution, confidence char list, missing char list, construct text", responses={
-    400: {
-        "description": "Bad Request",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Reference text must be provided."}
-            }
-        }
-    },
-    422: {
-        "description": "Unprocessable Entity",
-        "content": {
-            "application/json": {
-                "example": {
-                    "detail": [
-                        {
-                            "loc": ["body", "text"],
-                            "msg": "field required",
-                            "type": "value_error.missing"
-                        }
-                    ]
-                }
-            }
-        }
-    },
-    500: {
-        "description": "Internal Server Error",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Unexpected error: Error processing characters: <error_message>"}
-            }
-        }
-    }
-})
+@common_router.post('/getTextMatrices', response_model=ErrorArraysResponse, summary="Compute Text Matrices")
 async def compute_errors(data: TextData):
     try:
         # Validate input data
@@ -60,7 +37,7 @@ async def compute_errors(data: TextData):
         language = data.language
 
         # Validate language
-        allowed_languages = {"en", "ta", "te", "kn", "hi"}
+        allowed_languages = {"en", "ta", "te", "kn", "hi", "gu", "or"}
         if language not in allowed_languages:
             raise HTTPException(status_code=400, detail=f"Unsupported language: {language}. Supported languages are: {', '.join(allowed_languages)}")
 
@@ -114,41 +91,8 @@ async def compute_errors(data: TextData):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-    
-@router.post("/getPhonemes", response_model=PhonemesResponse, summary="Get Phonemes", description="Converts text into phonemes.", responses={
-    400: {
-        "description": "Bad Request",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Input text cannot be empty."}
-            }
-        }
-    },
-    422: {
-        "description": "Unprocessable Entity",
-        "content": {
-            "application/json": {
-                "example": {
-                    "detail": [
-                        {
-                            "loc": ["body", "text"],
-                            "msg": "field required",
-                            "type": "value_error.missing"
-                        }
-                    ]
-                }
-            }
-        }
-    },
-    500: {
-        "description": "Internal Server Error",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Unexpected error: Error getting phonemes: <error_message>"}
-            }
-        }
-    }
-})
+
+@common_router.post('/getPhonemes', response_model=PhonemesResponse, summary="Get Phonemes", description="Converts text into phonemes.")
 async def get_phonemes(data: PhonemesRequest):
     try:
         if not data.text.strip():
@@ -161,41 +105,8 @@ async def get_phonemes(data: PhonemesRequest):
     except Exception as e:
         logger.error(f"Error getting phonemes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting phonemes: {str(e)}")
-    
-@router.post('/audio_processing', response_model=AudioProcessingResponse, summary="Process Audio", description="Processes audio by denoising and detecting pauses.", responses={
-    400: {
-        "description": "Bad Request",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Base64 string of audio must be provided."}
-            }
-        }
-    },
-    422: {
-        "description": "Unprocessable Entity",
-        "content": {
-            "application/json": {
-                "example": {
-                    "detail": [
-                        {
-                            "loc": ["body", "text"],
-                            "msg": "field required",
-                            "type": "value_error.missing"
-                        }
-                    ]
-                }
-            }
-        }
-    },
-    500: {
-        "description": "Internal Server Error",
-        "content": {
-            "application/json": {
-                "example": {"detail": "Unexpected error: <error_message>"}
-            }
-        }
-    }
-})
+
+@common_router.post('/audio_processing', response_model=AudioProcessingResponse, summary="Process Audio", description="Processes audio by denoising and detecting pauses.")
 async def audio_processing(data: audioData):
     try:
         # Validate input data
@@ -249,4 +160,31 @@ async def audio_processing(data: audioData):
         raise e
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@common_router.post('/uploadAudio', summary="upload the file", description="Uploads base64-encoded audio to S3 with a custom file name and storage path.")
+async def upload_audio(data: dict):
+    """
+    API to upload base64-encoded audio to S3 with a custom file name and storage path.
+    """
+    try:
+        # Extract values from request body
+        file_name = data.get("file_name")
+        file_storage_path = data.get("file_storage_path")
+        base64_string = data.get("base64_string")
+
+        # Validate input
+        if not base64_string or not base64_string.strip():
+            raise HTTPException(status_code=400, detail="Base64 string cannot be empty.")
+        if not file_name or not file_name.strip():
+            raise HTTPException(status_code=400, detail="File name cannot be empty.")
+        if not file_storage_path or not file_storage_path.strip():
+            raise HTTPException(status_code=400, detail="File storage path cannot be empty.")
+
+        # Process and upload audio
+        return process_audio_and_upload(file_name, file_storage_path, base64_string)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
