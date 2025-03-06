@@ -8,6 +8,7 @@ import soundfile as sf
 from pathlib import Path
 import boto3
 import os
+import tempfile
 
 english_phoneme = ["b","d","f","g","h","ʤ","k","l","m","n","p","r","s","t","v","w","z","ʒ","tʃ","ʃ","θ","ð","ŋ","j","æ","eɪ","ɛ","i:","ɪ","aɪ","ɒ","oʊ","ʊ","ʌ","u:","ɔɪ","aʊ","ə","eəʳ","ɑ:","ɜ:ʳ","ɔ:","ɪəʳ","ʊəʳ","i","u","ɔ","ɑ","ɜ","e","ʧ","o","y","a", "x", "c"]
 anamoly_list = {}
@@ -291,16 +292,16 @@ def process_audio_and_upload(file_name: str, file_storage_path: str, base64_stri
     # Define full S3 file path
     s3_file_path = f"{file_storage_path}/{file_name}"
 
-    temp_file_path = Path(f"/tmp/{file_name}")
+    # Create a secure temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file_name}") as temp_file:
+        temp_file_path = Path(temp_file.name)
 
-    # Decode and save the audio file
-    audio_data = base64.b64decode(base64_string)
-    temp_file_path.write_bytes(audio_data)
+    try:
+        # Decode and save the audio file
+        audio_data = base64.b64decode(base64_string)
+        temp_file_path.write_bytes(audio_data)
 
-    # Upload to S3 inside the specified folder
-    s3_client.upload_file(str(temp_file_path), S3_BUCKET_NAME, s3_file_path)
+        # Upload to S3 inside the specified folder
+        s3_client.upload_file(str(temp_file_path), S3_BUCKET_NAME, s3_file_path)
 
-    # Remove temp file
-    temp_file_path.unlink(missing_ok=True)
-
-    return {"message": "File uploaded successfully"}
+        return {"message": "File uploaded successfully"}
