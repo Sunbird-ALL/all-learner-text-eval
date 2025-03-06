@@ -305,3 +305,7 @@ def process_audio_and_upload(file_name: str, file_storage_path: str, base64_stri
         s3_client.upload_file(str(temp_file_path), S3_BUCKET_NAME, s3_file_path)
 
         return {"message": "File uploaded successfully"}
+    finally:
+        # Remove temp file securely
+        temp_file_path.unlink(missing_ok=True)
+
