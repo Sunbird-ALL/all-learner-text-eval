@@ -1,10 +1,13 @@
 import base64
 import io
+import wave
 import ffmpeg
 from functools import lru_cache
 import eng_to_ipa as p
 from fuzzywuzzy import fuzz
+import numpy as np
 import soundfile as sf
+import parselmouth
 
 english_phoneme = ["b","d","f","g","h","ʤ","k","l","m","n","p","r","s","t","v","w","z","ʒ","tʃ","ʃ","θ","ð","ŋ","j","æ","eɪ","ɛ","i:","ɪ","aɪ","ɒ","oʊ","ʊ","ʌ","u:","ɔɪ","aʊ","ə","eəʳ","ɑ:","ɜ:ʳ","ɔ:","ɪəʳ","ʊəʳ","i","u","ɔ","ɑ","ɜ","e","ʧ","o","y","a", "x", "c"]
 anamoly_list = {}
@@ -114,20 +117,68 @@ def get_error_arrays(alignments, reference, hypothesis):
     }
 
 def get_pause_count(audio_io):
-        # Run the FFmpeg command with the input from the byte stream
-        process = (
-            ffmpeg
-            .input('pipe:0')
-            .filter('silencedetect', noise='-40dB', duration=0.5)
-            .output('pipe:1', format='null')
-            .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
-        )
-        # Write the audio data to the stdin of the FFmpeg process
-        stdout, stderr = process.communicate(input=audio_io.read())
-        # Parse the stderr output to count the silences
-        silence_lines = stderr.decode().split('\n')
-        silence_start_count = sum(1 for line in silence_lines if "silence_start" in line)
-        return silence_start_count
+    # Read the entire data from audio_io
+    original_audio_data = audio_io.read()
+    audio_io.seek(0)     # Rewind if you need to use audio_io again
+
+    # Load audio samples for processing
+    samples, sr = sf.read(io.BytesIO(original_audio_data), dtype="float32")
+    if sr <= 0 or len(samples) == 0:
+        # If something is invalid, just return 0, 0.0
+        return 0, 0.0
+    total_duration = len(samples) / sr
+    skip_seconds = 0.75
+
+    # If we can't skip 0.75s from start & end, there's no "middle"
+    if total_duration <= 2 * skip_seconds:
+        # We'll treat that as no valid portion to analyze => return zeros
+        return 0, 0.0
+
+    start_sample = int(sr * skip_seconds)
+    end_sample = int(sr * (total_duration - skip_seconds))
+    middle_samples = samples[start_sample:end_sample]
+
+    # Convert float32 -> int16
+    middle_int16 = (middle_samples * 32767).astype(np.int16)
+
+    # Create in-memory WAV of that portion
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1)      # assume mono
+        w.setsampwidth(2)     # 16-bit
+        w.setframerate(sr)
+        w.writeframes(middle_int16.tobytes())
+    buf.seek(0)
+
+    # Run ffmpeg silencedetect
+    process = (
+        ffmpeg
+        .input('pipe:0')
+        .filter('silencedetect', noise='-40dB', duration=0.5)
+        .output('pipe:1', format='null')
+        .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
+    )
+    stdout, stderr = process.communicate(input=buf.read())
+
+    lines = stderr.decode().split('\n')
+    # Count how many times we see "silence_start"
+    pause_count = sum(1 for line in lines if "silence_start" in line)
+
+    # Also gather durations from "silence_duration"
+    pause_durations = []
+    for line in lines:
+        if "silence_duration" in line:
+            try:
+                parts = line.split("silence_duration:")
+                if len(parts) > 1:
+                    dur_str = parts[1].strip().split()[0]
+                    pause_durations.append(float(dur_str))
+            except:
+                pass
+
+    avg_pause = sum(pause_durations) / len(pause_durations) if pause_durations else 0.0
+    avg_pause = np.round(avg_pause, 2)
+    return pause_count, avg_pause
 
 def find_closest_match(target_word, input_string):
     # Tokenize the input string into words
@@ -265,3 +316,301 @@ def processLP(orig_text, resp_text):
     #function to calculate wer cer, substitutions, deletions and insertions, silence, repetitions
     #insert into DB the LearnerProfile vector
     return cons_list, miss_list,construct_text
+
+def read_wave_bytes(wav_data: bytes):
+    with io.BytesIO(wav_data) as mem:
+        with wave.open(mem, "rb") as f:
+            num_channels = f.getnchannels()
+            sampwidth = f.getsampwidth()
+            assert sampwidth == 2, f"Expected 16-bit, got {sampwidth * 8}-bit"
+            sample_rate = f.getframerate()
+            num_frames = f.getnframes()
+            data = f.readframes(num_frames)
+
+    samples_int16 = np.frombuffer(data, dtype=np.int16)
+    if num_channels > 1:
+        samples_int16 = samples_int16.reshape(-1, num_channels)
+        samples_int16 = samples_int16.mean(axis=1).astype(np.int16)
+
+    samples_float32 = samples_int16.astype(np.float32) / 32768.0
+    return samples_float32, sample_rate
+
+def extract_pitch_praat(wav_data: bytes, pitch_floor=75, pitch_ceiling=500):
+    try:
+        samples, sr = read_wave_bytes(wav_data)
+        sound = parselmouth.Sound(samples, sr)
+        pitch = sound.to_pitch(pitch_floor=pitch_floor, pitch_ceiling=pitch_ceiling)
+        pitch_values = pitch.selected_array['frequency']
+        pitch_values = pitch_values[pitch_values != 0]
+        return pitch_values
+    except Exception as e:
+        raise RuntimeError(f"Error extracting pitch with parselmouth: {e}")
+
+def classify_pitch(pitch_values):
+    if pitch_values.size == 0:
+        return "N/A"
+    mean_pitch = np.round(np.mean(pitch_values), 2)
+    std_pitch = np.round(np.std(pitch_values), 2)
+
+    if 120 <= mean_pitch <= 400:
+        if std_pitch < 15:
+            return "Flat"
+        elif std_pitch <= 70:
+            return "Natural"
+        elif std_pitch <= 100:
+            return "Exaggerated"
+        else:
+            return "Erratic"
+    else:
+        # If out of typical range, treat as either "Erratic" or "Exaggerated"
+        if std_pitch > 50:
+            return "Erratic"
+        else:
+            return "Exaggerated"
+        
+def extract_intensity_praat(wav_data: bytes, intensity_threshold=30):
+    try:
+        samples, sr = read_wave_bytes(wav_data)
+        sound = parselmouth.Sound(samples, sr)
+        intensity_obj = sound.to_intensity()
+        # intensity_obj.values has shape (1, n_frames).
+        # Flatten to get a 1D array of intensities
+        intensity_values = intensity_obj.values.flatten()
+
+        # Filter out intensities below the threshold
+        intensity_values = intensity_values[intensity_values >= intensity_threshold]
+        return intensity_values
+    except Exception as e:
+        raise RuntimeError(f"Error extracting intensity with parselmouth: {e}")
+
+
+def classify_intensity(intensity_values):
+    if intensity_values.size == 0:
+        return "N/A"
+
+    mean_intensity = np.round(np.mean(intensity_values), 2)
+    std_intensity = np.round(np.std(intensity_values), 2)
+    
+    if 40 <= mean_intensity <= 80:
+        if std_intensity < 6:
+            return "Flat"
+        elif std_intensity <= 15:
+            return "Natural"
+        elif std_intensity <= 25:
+            return "Exaggerated"
+        else:
+            return "Erratic"
+    else:
+        # Outside typical range -> call it Exaggerated or Erratic
+        if std_intensity > 10:
+            return "Erratic"
+        else:
+            return "Exaggerated"
+        
+def classify_expression(pitch_values, intensity_values):
+
+    # If either is empty, we can't compute expression
+    if pitch_values.size == 0 or intensity_values.size == 0:
+        return "N/A"
+
+    p_std = np.round(np.std(pitch_values), 2)
+    mean_pitch = np.round(np.mean(pitch_values), 2)
+    i_std = np.round(np.std(intensity_values), 2)
+    mean_intensity = np.round(np.mean(intensity_values), 2)
+
+    # Pitch score
+    if 120 <= mean_pitch <= 400:
+        if 15 <= p_std <= 70:
+            pitch_score = 4
+        elif 0 <= p_std < 15:
+            pitch_score = 3
+        elif 70 < p_std <= 100:
+            pitch_score = 2
+        elif p_std > 100:
+            pitch_score = 1
+    else:
+        if p_std > 50:
+            pitch_score = 1
+        else:
+            pitch_score = 2
+
+    # Intensity score
+    if 40 <= mean_intensity <= 80:
+        if 6 <= i_std <= 15:
+            intensity_score = 4
+        elif 15 < i_std <= 25:
+            intensity_score = 3
+        elif i_std > 25:
+            intensity_score = 2
+        else:
+            intensity_score = 1
+    else:
+        if i_std > 10:
+            intensity_score = 1
+        else:
+            intensity_score = 2
+
+    avg_score = (pitch_score + intensity_score) // 2
+    if avg_score == 4:
+        return "Fluent"
+    elif avg_score == 3:
+        return "Moderately Fluent"
+    elif avg_score == 2:
+        return "Disfluent"
+    else:
+        return "Very Disfluent"
+    
+def classify_smoothness(pause_count, avg_pause):
+
+    #  Count-based score
+    if pause_count <= 2:
+        count_score = 4
+    elif pause_count <= 4:
+        count_score = 3
+    elif pause_count <= 6:
+        count_score = 2
+    else:
+        count_score = 1
+
+    #  Duration-based score
+    if avg_pause <= 0.6:
+        duration_score = 4
+    elif avg_pause <= 1.0:
+        duration_score = 3
+    elif avg_pause <= 1.5:
+        duration_score = 2
+    else:
+        duration_score = 1
+
+    overall_score = (count_score + duration_score) // 2
+
+    if overall_score == 4:
+        return "Fluent"
+    elif overall_score == 3:
+        return "Moderately Fluent"
+    elif overall_score == 2:
+        return "Disfluent"
+    else:
+        return "Very Disfluent"
+
+def calculate_wpm_from_audio(hypothesis_text: str, base64_audio: str) -> float:
+
+    if not base64_audio:
+        return 0.0
+    if not hypothesis_text:
+        return 0.0
+
+    try:
+        #  Decode base64
+        audio_data = base64.b64decode(base64_audio)
+        audio_io = io.BytesIO(audio_data)
+        #  Read with soundfile
+        samples, sr = sf.read(audio_io, dtype="float32")
+        duration_seconds = len(samples) / sr if sr else 0.0
+        duration_minutes = duration_seconds / 60.0 if duration_seconds > 0 else 0
+
+        #  Word count from hypothesis
+        word_count = len(hypothesis_text.strip().split()) if hypothesis_text.strip() else 0
+
+        #  WPM
+        if duration_minutes > 0 and word_count > 0:
+            wpm = word_count / duration_minutes
+        else:
+            wpm = 0.0
+        return np.round(wpm, 2)
+    except Exception as e:
+        print(f"Error calculating WPM: {str(e)}")
+        return 0.0
+    
+def classify_tempo(estimated_wpm: float, pause_count: int, language: str) -> str:
+    if language == "kn":
+        if estimated_wpm < 15:
+            wpm_score = 1  # Erratic
+        elif estimated_wpm < 30:
+            wpm_score = 2  # Exaggerated
+        elif estimated_wpm < 50:
+            wpm_score = 3  # Flat
+        elif estimated_wpm <= 140:
+            wpm_score = 4  # Natural
+        elif estimated_wpm <= 180:
+            wpm_score = 2  # Exaggerated
+        else:
+            wpm_score = 1  # Erratic
+    else:
+        if estimated_wpm < 40:
+            wpm_score = 1  # Erratic
+        elif estimated_wpm < 60:
+            wpm_score = 2  # Exaggerated
+        elif estimated_wpm < 100:
+            wpm_score = 3  # Flat
+        elif estimated_wpm <= 180:
+            wpm_score = 4  # Natural
+        elif estimated_wpm <= 240:
+            wpm_score = 2  # Exaggerated
+        else:
+            wpm_score = 1  # Erratic
+
+    # Assign a score based on pause count
+    if pause_count <= 2:
+        pause_score = 4
+    elif pause_count <= 4:
+        pause_score = 3
+    elif pause_count <= 6:
+        pause_score = 2
+    else:
+        pause_score = 1
+
+    # Calculate the weighted score 
+    weighted_score = (2 * wpm_score + pause_score) // 3
+
+    # Map the weighted score back to a tempo classification
+    if weighted_score == 4:
+        return "Natural"
+    elif weighted_score == 3:
+        return "Flat"
+    elif weighted_score == 2:
+        return "Exaggerated"
+    else:
+        return "Erratic"
+
+def classify_rate(estimated_wpm: float, language: str, single_word: bool = False) -> str:
+    if single_word:
+        if estimated_wpm < 10:
+            return "Very Disfluent"
+        elif estimated_wpm < 20:
+            return "Disfluent"
+        elif estimated_wpm < 30:
+            return "Moderately Fluent"
+        elif estimated_wpm <= 80:
+            return "Fluent"
+        elif estimated_wpm <= 120:
+            return "Disfluent"
+        else:
+            return "Very Disfluent"
+    else:
+        if language == "kn":
+            if estimated_wpm < 15:
+                return "Very Disfluent"
+            elif estimated_wpm < 30:
+                return "Disfluent"
+            elif estimated_wpm < 50:
+                return "Moderately Fluent"
+            elif estimated_wpm <= 140:
+                return "Fluent"
+            elif estimated_wpm <= 180:
+                return "Disfluent"
+            else:
+                return "Very Disfluent"
+        else:
+            if estimated_wpm < 40:
+                return "Very Disfluent"
+            elif estimated_wpm < 60:
+                return "Disfluent"
+            elif estimated_wpm < 100:
+                return "Moderately Fluent"
+            elif estimated_wpm <= 180:
+                return "Fluent"
+            elif estimated_wpm <= 240:
+                return "Disfluent"
+            else:
+                return "Very Disfluent"
