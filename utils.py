@@ -220,8 +220,7 @@ def identify_missing_tokens(orig_text, resp_text):
     construct_text = []
     
     # Precompute phonemes for response words for quick lookup
-    resp_phonemes = {word: p.convert(word) for word in resp_word_list}
-    print("resp_phoneme::", resp_phonemes)
+    resp_phonemes = {word: p.convert(word).replace('*', '') for word in resp_word_list}
     for word in orig_word_list:
         # Precompute original word phonemes
         p_word = p.convert(word)
@@ -256,8 +255,7 @@ def identify_missing_tokens(orig_text, resp_text):
 def processLP(orig_text, resp_text):
     cons_list, miss_list, construct_text = identify_missing_tokens(orig_text, resp_text)
 
-    #remove phonemes from miss_list which are in cons_list, ?but add those phonemes a count of could be issue
-
+    #remove phonemes from miss_list which are in cons_list, ?but add those phonemes a count of could be issu
     # phonemes in constructed list are familiar ones
     # phonemes that are in miss_list and not in cons_list are the unfamiliar ones
     unfamiliar_list = []
