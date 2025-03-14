@@ -116,10 +116,10 @@ async def compute_errors(data: TextData):
                 logger.error(f"Error processing pause count: {str(e)}")
                 pause_count = None
 
-            # Classify tempo using both wpm and pause_count
-            tempo_class = classify_tempo(tempo_wpm, pause_count, language)
             # Determine if reference is a single word
             single_word = len(reference.split()) == 1
+            # Classify tempo using both wpm and pause_count
+            tempo_class = classify_tempo(tempo_wpm, pause_count, language, single_word)
             rate_class = classify_rate(tempo_wpm, language, single_word)
 
         return {

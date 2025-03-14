@@ -522,35 +522,54 @@ def calculate_wpm_from_audio(hypothesis_text: str, base64_audio: str) -> float:
         print(f"Error calculating WPM: {str(e)}")
         return 0.0
     
-def classify_tempo(estimated_wpm: float, pause_count: int, language: str) -> str:
-    if language == "kn":
-        if estimated_wpm < 15:
-            wpm_score = 1  # Erratic
+def compute_wpm_score(estimated_wpm: float, language: str, single_word: bool) -> int: 
+    language = language.lower()
+    if single_word:
+        if estimated_wpm < 10:
+            return 1  # Erratic
+        elif estimated_wpm < 20:
+            return 2  # Exaggerated
         elif estimated_wpm < 30:
-            wpm_score = 2  # Exaggerated
-        elif estimated_wpm < 50:
-            wpm_score = 3  # Flat
-        elif estimated_wpm <= 140:
-            wpm_score = 4  # Natural
-        elif estimated_wpm <= 180:
-            wpm_score = 2  # Exaggerated
+            return 3  # Flat
+        elif estimated_wpm <= 80:
+            return 4  # Natural
+        elif estimated_wpm <= 120:
+            return 2  # Exaggerated
         else:
-            wpm_score = 1  # Erratic
+            return 1  # Erratic
     else:
-        if estimated_wpm < 40:
-            wpm_score = 1  # Erratic
-        elif estimated_wpm < 60:
-            wpm_score = 2  # Exaggerated
-        elif estimated_wpm < 100:
-            wpm_score = 3  # Flat
-        elif estimated_wpm <= 180:
-            wpm_score = 4  # Natural
-        elif estimated_wpm <= 240:
-            wpm_score = 2  # Exaggerated
+        if language == "kn":
+            if estimated_wpm < 15:
+                return 1  # Erratic
+            elif estimated_wpm < 30:
+                return 2  # Exaggerated
+            elif estimated_wpm < 50:
+                return 3  # Flat
+            elif estimated_wpm <= 140:
+                return 4  # Natural
+            elif estimated_wpm <= 180:
+                return 2  # Exaggerated
+            else:
+                return 1  # Erratic
         else:
-            wpm_score = 1  # Erratic
+            if estimated_wpm < 40:
+                return 1  # Erratic
+            elif estimated_wpm < 60:
+                return 2  # Exaggerated
+            elif estimated_wpm < 100:
+                return 3  # Flat
+            elif estimated_wpm <= 180:
+                return 4  # Natural
+            elif estimated_wpm <= 240:
+                return 2  # Exaggerated
+            else:
+                return 1  # Erratic
 
-    # Assign a score based on pause count
+def classify_tempo(estimated_wpm: float, pause_count: int, language: str, single_word: bool = False) -> str:
+    # Compute the wpm score using the helper function.
+    wpm_score = compute_wpm_score(estimated_wpm, language, single_word)
+
+    # Determine a pause score.
     if pause_count <= 2:
         pause_score = 4
     elif pause_count <= 4:
@@ -560,10 +579,10 @@ def classify_tempo(estimated_wpm: float, pause_count: int, language: str) -> str
     else:
         pause_score = 1
 
-    # Calculate the weighted score 
+    # Calculate the weighted score.
     weighted_score = (2 * wpm_score + pause_score) // 3
 
-    # Map the weighted score back to a tempo classification
+    # Map the weighted score to a classification string.
     if weighted_score == 4:
         return "Natural"
     elif weighted_score == 3:
