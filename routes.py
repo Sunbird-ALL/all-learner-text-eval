@@ -3,7 +3,7 @@ import io
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, split_into_phonemes, processLP
+from utils import denoise_with_rnnoise, get_error_arrays, get_pause_count, is_silent, split_into_phonemes, processLP
 from schemas import TextData, audioData, PhonemesRequest, PhonemesResponse, ErrorArraysResponse, AudioProcessingResponse
 from typing import List
 import jiwer
@@ -207,6 +207,11 @@ async def audio_processing(data: audioData):
         try:
             audio_data = data.base64_string
             audio_bytes = base64.b64decode(audio_data)
+            if is_silent(audio_bytes):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Audio is silent. Please provide a valid audio recording."
+                )
             audio_io = io.BytesIO(audio_bytes)
         except Exception as e:
             logger.error(f"Invalid base64 string: {str(e)}")

@@ -1,9 +1,11 @@
 import base64
 import io
+from fastapi import logger
 import ffmpeg
 from functools import lru_cache
 import eng_to_ipa as p
 from fuzzywuzzy import fuzz
+import numpy as np
 import soundfile as sf
 
 english_phoneme = ["b","d","f","g","h","ʤ","k","l","m","n","p","r","s","t","v","w","z","ʒ","tʃ","ʃ","θ","ð","ŋ","j","æ","eɪ","ɛ","i:","ɪ","aɪ","ɒ","oʊ","ʊ","ʌ","u:","ɔɪ","aʊ","ə","eəʳ","ɑ:","ɜ:ʳ","ɔ:","ɪəʳ","ʊəʳ","i","u","ɔ","ɑ","ɜ","e","ʧ","o","y","a", "x", "c"]
@@ -267,3 +269,24 @@ def processLP(orig_text, resp_text):
     #function to calculate wer cer, substitutions, deletions and insertions, silence, repetitions
     #insert into DB the LearnerProfile vector
     return cons_list, miss_list,construct_text
+
+def is_silent(audio_bytes: bytes, silence_threshold_db: float = -40.0) -> bool:
+    try:
+        with io.BytesIO(audio_bytes) as audio_io:
+            samples, sr = sf.read(audio_io, dtype='float32', always_2d=False)
+            if len(samples) == 0:
+                return True  # Empty audio is considered silent
+            
+            # Convert to mono if multi-channel
+            if samples.ndim > 1:
+                samples = np.mean(samples, axis=1)
+            
+            # Calculate RMS and convert to dB
+            rms = np.sqrt(np.mean(np.square(samples)))
+            if rms == 0:
+                return True
+            db = 20 * np.log10(rms)
+            return db < silence_threshold_db
+    except Exception as e:
+        logger.error(f"Error checking for silence: {str(e)}")
+        return False  # Assume non-silent on error
