@@ -409,56 +409,57 @@ def classify_intensity(intensity_values):
         
 def classify_expression(pitch_values, intensity_values):
 
-    # If either is empty, we can't compute expression
     if pitch_values.size == 0 or intensity_values.size == 0:
         return "N/A"
 
-    p_std = np.round(np.std(pitch_values), 2)
-    mean_pitch = np.round(np.mean(pitch_values), 2)
-    i_std = np.round(np.std(intensity_values), 2)
-    mean_intensity = np.round(np.mean(intensity_values), 2)
+    # Helper to convert mean / std into a 1‑4 score
+    def _score(mean, std, cfg):
+        """cfg = {'mean': (lo, hi), 'std': [(lo, hi, pts), …]}"""
+        if not (cfg['mean'][0] <= mean <= cfg['mean'][1]):
+            # Outside the "typical mean" window ⇒ use the fallback rule
+            return 1 if std > cfg['fallback_std_gt'] else 2
 
-    # Pitch score
-    if 120 <= mean_pitch <= 400:
-        if 15 <= p_std <= 70:
-            pitch_score = 4
-        elif 0 <= p_std < 15:
-            pitch_score = 3
-        elif 70 < p_std <= 100:
-            pitch_score = 2
-        elif p_std > 100:
-            pitch_score = 1
-    else:
-        if p_std > 50:
-            pitch_score = 1
-        else:
-            pitch_score = 2
+        for lo, hi, pts in cfg['std']:
+            if lo <= std <= hi:
+                return pts
+        # If no band matched (shouldn’t happen), default to worst score
+        return 1
 
-    # Intensity score
-    if 40 <= mean_intensity <= 80:
-        if 6 <= i_std <= 20:
-            intensity_score = 4
-        elif 20 < i_std <= 25:
-            intensity_score = 3
-        elif i_std > 25:
-            intensity_score = 2
-        else:
-            intensity_score = 1
-    else:
-        if i_std > 10:
-            intensity_score = 1
-        else:
-            intensity_score = 2
+    # Threshold tables for pitch & intensity
+    PITCH_CFG = {
+        'mean': (120, 400),
+        'std': [
+            (15, 70, 4),
+            (0, 15, 3),
+            (70, 100, 2),
+            (100, float('inf'), 1),
+        ],
+        'fallback_std_gt': 50,   # if mean outside range
+    }
+
+    INT_CFG = {
+        'mean': (40, 80),
+        'std': [
+            (6, 20, 4),
+            (20, 25, 3),
+            (25, float('inf'), 2),
+            (0, 6, 1),
+        ],
+        'fallback_std_gt': 10,
+    }
+
+    # Compute scores 
+    pitch_score     = _score(np.mean(pitch_values),     np.std(pitch_values),     PITCH_CFG)
+    intensity_score = _score(np.mean(intensity_values), np.std(intensity_values), INT_CFG)
 
     avg_score = (pitch_score + intensity_score) // 2
-    if avg_score == 4:
-        return "Fluent"
-    elif avg_score == 3:
-        return "Moderately Fluent"
-    elif avg_score == 2:
-        return "Disfluent"
-    else:
-        return "Very Disfluent"
+
+    # Map average score to label 
+    return {
+        4: "Fluent",
+        3: "Moderately Fluent",
+        2: "Disfluent",
+    }.get(avg_score, "Very Disfluent")
     
 def classify_smoothness(pause_count, avg_pause):
 
@@ -522,48 +523,50 @@ def calculate_wpm_from_audio(hypothesis_text: str, base64_audio: str) -> float:
         print(f"Error calculating WPM: {str(e)}")
         return 0.0
     
-def compute_wpm_score(estimated_wpm: float, language: str, single_word: bool) -> int: 
+def compute_wpm_score(estimated_wpm: float, language: str, single_word: bool) -> int:
+
     language = language.lower()
+
+    # Each tuple is (lower_bound_inclusive, upper_bound_exclusive, score)
+    SINGLE_WORD_BANDS = [
+        (0,   10,   1),   # Erratic
+        (10,  20,   2),   # Exaggerated
+        (20,  30,   3),   # Flat
+        (30,  110,  4),   # Natural
+        (110, 120,  2),   # Exaggerated
+        (120, float("inf"), 1)  # Erratic
+    ]
+
+    KN_BANDS = [
+        (0,   15,   1),
+        (15,  30,   2),
+        (30,  50,   3),
+        (50,  140,  4),
+        (140, 180,  2),
+        (180, float("inf"), 1)
+    ]
+
+    DEFAULT_BANDS = [
+        (0,   40,   1),
+        (40,  60,   2),
+        (60,  100,  3),
+        (100, 180,  4),
+        (180, 240,  2),
+        (240, float("inf"), 1)
+    ]
+
     if single_word:
-        if estimated_wpm < 10:
-            return 1  # Erratic
-        elif estimated_wpm < 20:
-            return 2  # Exaggerated
-        elif estimated_wpm < 30:
-            return 3  # Flat
-        elif estimated_wpm <= 110:
-            return 4  # Natural
-        elif estimated_wpm <= 120:
-            return 2  # Exaggerated
-        else:
-            return 1  # Erratic
+        bands = SINGLE_WORD_BANDS
     else:
-        if language == "kn":
-            if estimated_wpm < 15:
-                return 1  # Erratic
-            elif estimated_wpm < 30:
-                return 2  # Exaggerated
-            elif estimated_wpm < 50:
-                return 3  # Flat
-            elif estimated_wpm <= 140:
-                return 4  # Natural
-            elif estimated_wpm <= 180:
-                return 2  # Exaggerated
-            else:
-                return 1  # Erratic
-        else:
-            if estimated_wpm < 40:
-                return 1  # Erratic
-            elif estimated_wpm < 60:
-                return 2  # Exaggerated
-            elif estimated_wpm < 100:
-                return 3  # Flat
-            elif estimated_wpm <= 180:
-                return 4  # Natural
-            elif estimated_wpm <= 240:
-                return 2  # Exaggerated
-            else:
-                return 1  # Erratic
+        bands = KN_BANDS if language == "kn" else DEFAULT_BANDS
+
+    # Return the first matching score 
+    for low, high, score in bands:
+        if low <= estimated_wpm < high:
+            return score
+
+    # Fallback (should never be hit with the tables above)
+    return 1
 
 def classify_tempo(estimated_wpm: float, pause_count: int, language: str, single_word: bool = False) -> str:
     # Compute the wpm score using the helper function.
@@ -593,43 +596,48 @@ def classify_tempo(estimated_wpm: float, pause_count: int, language: str, single
         return "Erratic"
 
 def classify_rate(estimated_wpm: float, language: str, single_word: bool = False) -> str:
-    if single_word:
-        if estimated_wpm < 10:
-            return "Very Disfluent"
-        elif estimated_wpm < 20:
-            return "Disfluent"
-        elif estimated_wpm < 30:
-            return "Moderately Fluent"
-        elif estimated_wpm <= 110:
-            return "Fluent"
-        elif estimated_wpm <= 120:
-            return "Disfluent"
-        else:
-            return "Very Disfluent"
-    else:
-        if language == "kn":
-            if estimated_wpm < 15:
-                return "Very Disfluent"
-            elif estimated_wpm < 30:
-                return "Disfluent"
-            elif estimated_wpm < 50:
-                return "Moderately Fluent"
-            elif estimated_wpm <= 140:
-                return "Fluent"
-            elif estimated_wpm <= 180:
-                return "Disfluent"
-            else:
-                return "Very Disfluent"
-        else:
-            if estimated_wpm < 40:
-                return "Very Disfluent"
-            elif estimated_wpm < 60:
-                return "Disfluent"
-            elif estimated_wpm < 100:
-                return "Moderately Fluent"
-            elif estimated_wpm <= 180:
-                return "Fluent"
-            elif estimated_wpm <= 240:
-                return "Disfluent"
-            else:
-                return "Very Disfluent"
+
+
+    # Each tuple is (lower_bound_inclusive, upper_bound_exclusive, label)
+    SINGLE_BANDS = [
+        (0,   10,   "Very Disfluent"),
+        (10,  20,   "Disfluent"),
+        (20,  30,   "Moderately Fluent"),
+        (30,  110,  "Fluent"),
+        (110, 120,  "Disfluent"),
+        (120, float("inf"), "Very Disfluent"),
+    ]
+
+    KN_BANDS = [
+        (0,   15,   "Very Disfluent"),
+        (15,  30,   "Disfluent"),
+        (30,  50,   "Moderately Fluent"),
+        (50,  140,  "Fluent"),
+        (140, 180,  "Disfluent"),
+        (180, float("inf"), "Very Disfluent"),
+    ]
+
+    DEFAULT_BANDS = [
+        (0,   40,   "Very Disfluent"),
+        (40,  60,   "Disfluent"),
+        (60,  100,  "Moderately Fluent"),
+        (100, 180,  "Fluent"),
+        (180, 240,  "Disfluent"),
+        (240, float("inf"), "Very Disfluent"),
+    ]
+
+    # Select the correct band table 
+    language = language.lower()
+    bands = (
+        SINGLE_BANDS if single_word
+        else KN_BANDS if language == "kn"
+        else DEFAULT_BANDS
+    )
+
+    #  Return the first matching label 
+    for low, high, label in bands:
+        if low <= estimated_wpm < high:
+            return label
+
+    # Fallback (should never fire with the tables above)
+    return "Very Disfluent"
