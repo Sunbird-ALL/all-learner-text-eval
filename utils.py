@@ -394,7 +394,7 @@ def classify_intensity(intensity_values):
     if 40 <= mean_intensity <= 80:
         if std_intensity < 6:
             return "Flat"
-        elif std_intensity <= 15:
+        elif std_intensity <= 20:
             return "Natural"
         elif std_intensity <= 25:
             return "Exaggerated"
@@ -436,9 +436,9 @@ def classify_expression(pitch_values, intensity_values):
 
     # Intensity score
     if 40 <= mean_intensity <= 80:
-        if 6 <= i_std <= 15:
+        if 6 <= i_std <= 20:
             intensity_score = 4
-        elif 15 < i_std <= 25:
+        elif 20 < i_std <= 25:
             intensity_score = 3
         elif i_std > 25:
             intensity_score = 2
@@ -531,7 +531,7 @@ def compute_wpm_score(estimated_wpm: float, language: str, single_word: bool) ->
             return 2  # Exaggerated
         elif estimated_wpm < 30:
             return 3  # Flat
-        elif estimated_wpm <= 80:
+        elif estimated_wpm <= 110:
             return 4  # Natural
         elif estimated_wpm <= 120:
             return 2  # Exaggerated
@@ -600,7 +600,7 @@ def classify_rate(estimated_wpm: float, language: str, single_word: bool = False
             return "Disfluent"
         elif estimated_wpm < 30:
             return "Moderately Fluent"
-        elif estimated_wpm <= 80:
+        elif estimated_wpm <= 110:
             return "Fluent"
         elif estimated_wpm <= 120:
             return "Disfluent"
