@@ -1,0 +1,30 @@
+# Configuration for the Prometheus /metrics endpoint exposed by this service.
+# Non-secret settings only - safe to edit without touching metrics.py.
+#
+# This is scraped by the "generic-service" Helm chart's Prometheus
+# ServiceMonitor (see AXL-DevOps/generic-service/values.yaml), which already
+# defaults to path=/metrics on the "http" port, so no chart changes are
+# needed once this endpoint exists.
+
+# Master switch - set to false to disable metrics collection/endpoint entirely.
+enabled: true
+
+# Path the /metrics endpoint is served on.
+endpoint: /metrics
+
+# Whether /metrics shows up in the FastAPI docs/OpenAPI schema.
+include_in_schema: false
+
+# Group similar status codes (e.g. 200/201/204 -> 2xx) to keep cardinality low.
+group_status_codes: true
+
+# Paths excluded from instrumentation (avoid the endpoint scraping itself,
+# and skip noisy doc routes).
+excluded_handlers:
+  - /metrics
+  - /api/docs
+  - /api/openapi.json
+
+# Prefix for all metric names, e.g. all_text_eval_http_requests_total.
+metric_namespace: all
+metric_subsystem: text_eval
