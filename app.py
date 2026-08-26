@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import FastAPI
 from routes import router
+from metrics import setup_metrics
 
 
 class JsonFormatter(logging.Formatter):
@@ -33,6 +34,7 @@ app = FastAPI(
 START_TIME = time.time()
 
 app.include_router(router)
+setup_metrics(app)
 
 # Health check endpoint
 @app.get("/ping")
