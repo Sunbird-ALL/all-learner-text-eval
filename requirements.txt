@@ -48,7 +48,7 @@ numba==0.58.1
 numpy==1.23.1
 orjson==3.10.3
 packaging==23.2
-Pillow==10.0.1
+Pillow==12.3.0
 platformdirs==3.9.1
 pooch==1.8.1
 praat-parselmouth==0.4.5
